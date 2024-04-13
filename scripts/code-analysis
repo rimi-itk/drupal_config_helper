@@ -27,7 +27,7 @@ rm -fr "$drupal_dir/$module_path"
 
 git config --global --add safe.directory /app
 # Create directories
-git ls-files -z | xargs --null -I {} --verbose bash -c 'mkdir -p '"$drupal_dir/$module_path/"'$(dirname {})'
+git ls-files -z | xargs --null -I {} bash -c 'mkdir -p '"$drupal_dir/$module_path/"'$(dirname {})'
 # Copy files
 git ls-files -z | xargs --null -I {} cp {} "$drupal_dir/$module_path/{}"
 

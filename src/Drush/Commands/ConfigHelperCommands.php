@@ -2,10 +2,7 @@
 
 namespace Drupal\config_helper\Drush\Commands;
 
-use Drupal\Core\Config\ConfigFactoryInterface;
-use Drupal\Core\Extension\ModuleHandlerInterface;
-use Drupal\Core\File\FileSystemInterface;
-use Drupal\Core\Serialization\Yaml;
+use Drupal\config_helper\ConfigHelper;
 use Drush\Attributes as CLI;
 use Drush\Commands\AutowireTrait;
 use Drush\Commands\DrushCommands;
@@ -22,9 +19,7 @@ final class ConfigHelperCommands extends DrushCommands {
    * Constructs a ConfigHelperCommands object.
    */
   public function __construct(
-    private readonly ModuleHandlerInterface $moduleHandler,
-    private readonly ConfigFactoryInterface $configFactory,
-    private readonly FileSystemInterface $fileSystem,
+    private readonly ConfigHelper $helper,
   ) {
     parent::__construct();
   }
@@ -39,7 +34,9 @@ final class ConfigHelperCommands extends DrushCommands {
   public function list(
     array $patterns,
   ): void {
-    $names = $this->getConfigNames($patterns);
+    $this->initialize();
+
+    $names = $this->helper->getConfigNames($patterns);
 
     foreach ($names as $name) {
       $this->io()->writeln($name);
@@ -60,31 +57,19 @@ final class ConfigHelperCommands extends DrushCommands {
     string $module,
     array $configNames,
   ): void {
-    if (!$this->moduleHandler->moduleExists($module)) {
+    $this->initialize();
+
+    if (!$this->helper->moduleExists($module)) {
       throw new RuntimeException(sprintf('Invalid module: %s', $module));
     }
 
     $configNames = empty($configNames)
-      ? $this->getModuleConfigNames($module)
-      : $this->getConfigNames($configNames);
+      ? $this->helper->getModuleConfigNames($module)
+      : $this->helper->getConfigNames($configNames);
 
     $question = sprintf("Enforce dependency on module %s in\n * %s\n ?", $module, implode("\n * ", $configNames));
     if ($this->io()->confirm($question)) {
-      foreach ($configNames as $name) {
-        $this->io()->writeln(sprintf('Config name: %s', $name));
-
-        $config = $this->configFactory->getEditable($name);
-
-        // Config::merge does merge correctly so we do it ourselves.
-        $dependencies = $config->get('dependencies') ?? [];
-        $dependencies['enforced']['module'][] = $module;
-        $dependencies['enforced']['module'] = array_unique($dependencies['enforced']['module']);
-        sort($dependencies['enforced']['module']);
-
-        $config->set('dependencies', $dependencies);
-
-        $config->save();
-      }
+      $this->helper->addEnforcedDependency($module, $configNames);
     }
   }
 
@@ -106,39 +91,25 @@ final class ConfigHelperCommands extends DrushCommands {
       'enforced' => FALSE,
     ]
   ): void {
-    if (!$this->moduleHandler->moduleExists($module)) {
+    $this->initialize();
+
+    if (!$this->helper->moduleExists($module)) {
       throw new RuntimeException(sprintf('Invalid module: %s', $module));
     }
 
     if ($options['enforced']) {
-      $configNames = $this->getEnforcedModuleConfigNames($module);
+      $configNames = $this->helper->getEnforcedModuleConfigNames($module);
     }
     else {
       $configNames = empty($configNames)
-        ? $this->getModuleConfigNames($module)
-        : $this->getConfigNames($configNames);
+        ? $this->helper->getModuleConfigNames($module)
+        : $this->helper->getConfigNames($configNames);
     }
 
-    $modulePath = $this->moduleHandler->getModule($module)->getPath();
-    $moduleConfigPath = $modulePath . '/config/' . ($options['optional'] ? 'optional' : 'install');
-
-    $question = sprintf("Write config\n * %s\n into %s?", implode("\n * ", $configNames), $moduleConfigPath);
+    $configPath = $this->helper->getModuleConfigPath($module, $options['optional']);
+    $question = sprintf("Write config\n * %s\n into %s?", implode("\n * ", $configNames), $configPath);
     if ($this->io()->confirm($question)) {
-      if (!is_dir($moduleConfigPath)) {
-        $this->fileSystem->mkdir($moduleConfigPath, 0755, TRUE);
-      }
-
-      foreach ($configNames as $name) {
-        $this->io()->writeln($name);
-
-        $filename = $name . '.yml';
-        $destination = $moduleConfigPath . '/' . $filename;
-        $config = $this->configFactory->get($name)->getRawData();
-        // @see https://www.drupal.org/node/2087879#s-exporting-configuration
-        unset($config['uuid'], $config['_core']);
-
-        file_put_contents($destination, Yaml::encode($config));
-      }
+      $this->helper->writeModuleConfig($module, $options['optional'], $configNames);
     }
   }
 
@@ -151,7 +122,7 @@ final class ConfigHelperCommands extends DrushCommands {
   #[CLI\Argument(name: 'configNames', description: 'The config names.')]
   #[CLI\Option(name: 'regex', description: 'Use regex search and replace.')]
   #[CLI\Usage(name: 'drush config_helper:rename porject project', description: 'Fix typo in config.')]
-  #[CLI\Usage(name: "drush config_helper:rename 'field_(.+)' '\1' --regex", description: 'Remove superfluous prefix from field machine names.')]
+  #[CLI\Usage(name: "drush config_helper:rename '/field_(.+)/' '\1' --regex", description: 'Remove superfluous prefix from field machine names.')]
   public function rename(
     string $from,
     string $to,
@@ -160,114 +131,22 @@ final class ConfigHelperCommands extends DrushCommands {
       'regex' => FALSE,
     ]
   ): void {
-    if (!$options['regex']) {
-      $from = '/' . preg_quote($from, '/') . '/';
-    }
+    $this->initialize();
 
-    $configNames = $this->getConfigNames($configNames);
-    $question = sprintf("Rename %s to %s in\n * %s\n?", $from, $to, implode("\n * ", $configNames));
+    $configNames = $this->helper->getConfigNames($configNames);
+    $question = sprintf("Rename %s to %s %sin\n * %s\n?", $from, $to, $options['regex'] ? '(regex)' : '', implode("\n * ", $configNames));
     if ($this->io()->confirm($question)) {
-      foreach ($configNames as $name) {
-        $config = $this->configFactory->getEditable($name);
-        $original = $config->getRawData();
-        $data = $this->replaceKeysAndValues($from, $to, $original);
-        $config->setData($data);
-        $config->save();
-
-        $newName = preg_replace($from, $to, $name);
-        if ($newName !== $name) {
-          $this->io()->writeln(sprintf('%s -> %s', $name, $newName));
-          $this->configFactory->rename($name, $newName);
-        }
-      }
+      $this->helper->renameConfig($from, $to, $configNames, (bool) $options['regex']);
     }
   }
 
   /**
-   * Replace in keys and values.
+   * Initialize.
    *
-   * @see https://stackoverflow.com/a/29619470
+   * @todo Can we automatically call this before each command?
    */
-  private function replaceKeysAndValues(
-    string $search,
-    string $replace,
-    array $input
-  ): array {
-    $return = [];
-    foreach ($input as $key => $value) {
-      if (preg_match($search, $key)) {
-        $key = preg_replace($search, $replace, $key);
-      }
-
-      if (is_array($value)) {
-        $value = $this->replaceKeysAndValues($search, $replace, $value);
-      }
-      elseif (is_string($value)) {
-        $value = preg_replace($search, $replace, $value);
-      }
-
-      $return[$key] = $value;
-    }
-
-    return $return;
-  }
-
-  /**
-   * Get config names matching patterns.
-   */
-  private function getConfigNames(array $patterns): array {
-    $names = $this->configFactory->listAll();
-    if (empty($patterns)) {
-      return $names;
-    }
-
-    $configNames = [];
-    foreach ($patterns as $pattern) {
-      $chunk = array_filter(
-        $names,
-        // phpcs:disable Drupal.Functions.DiscouragedFunctions.Discouraged -- https://www.php.net/manual/en/function.fnmatch.php#refsect1-function.fnmatch-notes
-        static fn ($name) => fnmatch($pattern, $name),
-      );
-      if (empty($chunk)) {
-        throw new RuntimeException(sprintf('No config matches %s', var_export($pattern, TRUE)));
-      }
-      $configNames[] = $chunk;
-    }
-
-    $configNames = array_unique(array_merge(...$configNames));
-    sort($configNames);
-
-    return $configNames;
-  }
-
-  /**
-   * Get config names for a module.
-   */
-  private function getModuleConfigNames(string $module): array {
-    return $this->getConfigNames(['*.' . $module . '.*']);
-  }
-
-  /**
-   * Get names of config that has an enforced dependency on a module.
-   */
-  private function getEnforcedModuleConfigNames(string $module): array {
-    $configNames = array_values(
-      array_filter(
-        $this->configFactory->listAll(),
-        function ($name) use ($module) {
-          $config = $this->configFactory->get($name)->getRawData();
-          $list = $config['dependencies']['enforced']['module'] ?? NULL;
-
-          return is_array($list) && in_array($module, $list, TRUE);
-        }
-      )
-    );
-
-    if (empty($configNames)) {
-      throw new RuntimeException(sprintf('No config has an enforced dependency on "%s".', $module));
-    }
-
-    return $configNames;
+  private function initialize(): void {
+    $this->helper->setLogger($this->logger());
   }
 
 }
