@@ -30,80 +30,49 @@ final class ConfigHelperCommands extends DrushCommands {
   }
 
   /**
-   * Rename config.
+   * List config names.
    */
-  #[CLI\Command(name: 'config_helper:rename')]
-  #[CLI\Argument(name: 'search', description: 'The value to search for.')]
-  #[CLI\Argument(name: 'replace', description: 'The replacement value.')]
-  #[CLI\Option(name: 'regex', description: 'Use regex search and replace.')]
-  #[CLI\Option(name: 'dry-run', description: 'Dry run.')]
-  #[CLI\Usage(name: 'drush config:rename porject project', description: 'Fix typo in config.')]
-  #[CLI\Usage(name: "drush config:rename 'field_(.+)' '\1' --regex", description: 'Remove superfluous prefix from field machine names.')]
-  public function rename(
-    string $search,
-    string $replace,
-    array $options = [
-      'regex' => FALSE,
-      'dry-run' => FALSE,
-    ]
-  ): void {
-    if (!$options['regex']) {
-      $search = '/' . preg_quote($search, '/') . '/';
-    }
+  #[CLI\Command(name: 'config_helper:list')]
+  #[CLI\Argument(name: 'patterns', description: 'Config names or patterns.')]
+  #[CLI\Usage(name: 'drush config_helper:list', description: 'List all config names.')]
+  #[CLI\Usage(name: 'drush config_helper:list "views.view.*"', description: 'List all views.')]
+  public function list(
+    array $patterns,
+  ) {
+    $names = $this->getConfigNames($patterns);
 
-    $this->io()->writeln(sprintf('Replacing %s with %s in config', $search, $replace));
-
-    $names = $this->configFactory->listAll();
     foreach ($names as $name) {
-      $config = $this->configFactory->getEditable($name);
-      $data = $this->replaceKeysAndValues($search, $replace, $config->get());
-      $config->setData($data);
-      $config->save();
-
-      if (preg_match($search, $name)) {
-        $newName = preg_replace($search, $replace, $name);
-        $this->io()->writeln(sprintf('%s -> %s', $name, $newName));
-        if (!$options['dry-run']) {
-          $this->configFactory->rename($name, $newName);
-        }
-      }
+      $this->io()->writeln($name);
     }
   }
 
   /**
-   * Enforce module dependencies in config.
+   * Enforce module dependency in config.
    *
    * @see https://www.drupal.org/node/2087879#s-example:~:text=The%20dependencies%20and%20enforced%20keys%20ensure,removed%20when%20the%20module%20is%20uninstalled
    */
   #[CLI\Command(name: 'config_helper:enforce-module-dependency')]
   #[CLI\Argument(name: 'module', description: 'The module name.')]
   #[CLI\Argument(name: 'configNames', description: 'The config names.')]
-  #[CLI\Option(name: 'remove-uuid', description: 'Remove uuid and _core from config.')]
-  #[CLI\Option(name: 'dry-run', description: 'Dry run.')]
-  #[CLI\Usage(name: 'drush config:enforce-module-dependency my_module another_module', description: '')]
+  #[CLI\Usage(name: 'drush config_helper:enforce-module-dependency my_module "*.my_module.*"', description: 'Enforce dependency on my_module')]
+  #[CLI\Usage(name: 'drush config_helper:enforce-module-dependency my_module', description: 'Shorthand for `drush config_helper:enforce-module-dependency my_module "*.my_module.*"`')]
   public function enforceModuleDependencies(
     string $module,
     array $configNames,
-    array $options = [
-      'remove-uuid' => FALSE,
-      'dry-run' => FALSE,
-    ]
   ): void {
     if (!$this->moduleHandler->moduleExists($module)) {
       throw new RuntimeException(sprintf('Invalid module: %s', $module));
     }
 
-    if (empty($configNames)) {
-      $configNames = $this->getModuleConfigNames($module);
-    }
+    $configNames = empty($configNames)
+      ? $this->getModuleConfigNames($module)
+      : $this->getConfigNames($configNames);
 
-    foreach ($configNames as $name) {
-      $this->io()->writeln(sprintf('Config name: %s', $name));
-      if (!$this->configExists($name)) {
-        throw new RuntimeException(sprintf('Invalid config name: %s', $name));
-      }
+    $question = sprintf("Enforce dependency on module %s in\n * %s\n ?", $module, implode("\n * ", $configNames));
+    if ($this->io()->confirm($question)) {
+      foreach ($configNames as $name) {
+        $this->io()->writeln(sprintf('Config name: %s', $name));
 
-      if (!$options['dry-run']) {
         $config = $this->configFactory->getEditable($name);
 
         // Config::merge does merge correctly so we do it ourselves.
@@ -114,32 +83,27 @@ final class ConfigHelperCommands extends DrushCommands {
 
         $config->set('dependencies', $dependencies);
 
-        if ($options['remove-uuid']) {
-          $config->clear('uuid');
-          $config->clear('_core');
-        }
-
         $config->save();
       }
     }
   }
 
   /**
-   * Move config info config/install folder in a module.
+   * Move config info config folder in a module.
    */
   #[CLI\Command(name: 'config_helper:move-module-config')]
   #[CLI\Argument(name: 'module', description: 'The module name.')]
   #[CLI\Argument(name: 'configNames', description: 'The config names.')]
-  #[CLI\Option(name: 'source', description: 'Config source directory.')]
+  #[CLI\Option(name: 'optional', description: 'Create as optional config.')]
   #[CLI\Option(name: 'enforced', description: 'Move only config with enforced dependency on the module.')]
   #[CLI\Option(name: 'dry-run', description: 'Dry run.')]
-  #[CLI\Usage(name: 'drush config:move-module-config my_module', description: '')]
-  #[CLI\Usage(name: 'drush config:move-module-config --source=sites/all/config my_module', description: '')]
+  #[CLI\Usage(name: 'drush config_helper:move-module-config my_module', description: '')]
+  #[CLI\Usage(name: 'drush config_helper:move-module-config --source=sites/all/config my_module', description: '')]
   public function moveModuleConfig(
     string $module,
     array $configNames,
     array $options = [
-      'source' => NULL,
+      'optional' => FALSE,
       'enforced' => FALSE,
       'dry-run' => FALSE,
     ]
@@ -150,7 +114,8 @@ final class ConfigHelperCommands extends DrushCommands {
 
     if ($options['enforced']) {
       $configNames = $this->getEnforcedModuleConfigNames($module);
-    } else {
+    }
+    else {
       if (empty($configNames)) {
         $configNames = $this->getModuleConfigNames($module);
       }
@@ -195,6 +160,47 @@ final class ConfigHelperCommands extends DrushCommands {
   }
 
   /**
+   * Rename config.
+   */
+  #[CLI\Command(name: 'config_helper:rename')]
+  #[CLI\Argument(name: 'search', description: 'The value to search for.')]
+  #[CLI\Argument(name: 'replace', description: 'The replacement value.')]
+  #[CLI\Option(name: 'regex', description: 'Use regex search and replace.')]
+  #[CLI\Option(name: 'dry-run', description: 'Dry run.')]
+  #[CLI\Usage(name: 'drush config_helper:rename porject project', description: 'Fix typo in config.')]
+  #[CLI\Usage(name: "drush config_helper:rename 'field_(.+)' '\1' --regex", description: 'Remove superfluous prefix from field machine names.')]
+  public function rename(
+    string $search,
+    string $replace,
+    array $options = [
+      'regex' => FALSE,
+      'dry-run' => FALSE,
+    ]
+  ): void {
+    if (!$options['regex']) {
+      $search = '/' . preg_quote($search, '/') . '/';
+    }
+
+    $this->io()->writeln(sprintf('Replacing %s with %s in config', $search, $replace));
+
+    $names = $this->configFactory->listAll();
+    foreach ($names as $name) {
+      $config = $this->configFactory->getEditable($name);
+      $data = $this->replaceKeysAndValues($search, $replace, $config->get());
+      $config->setData($data);
+      $config->save();
+
+      if (preg_match($search, $name)) {
+        $newName = preg_replace($search, $replace, $name);
+        $this->io()->writeln(sprintf('%s -> %s', $name, $newName));
+        if (!$options['dry-run']) {
+          $this->configFactory->rename($name, $newName);
+        }
+      }
+    }
+  }
+
+  /**
    * Replace in keys and values.
    *
    * @see https://stackoverflow.com/a/29619470
@@ -223,31 +229,62 @@ final class ConfigHelperCommands extends DrushCommands {
     return $return;
   }
 
+  /**
+   * Check if a config name exists.
+   */
   private function configExists(string $name): bool {
     return in_array($name, $this->configFactory->listAll(), TRUE);
   }
 
-  private function getModuleConfigNames(string $module): array {
-  // Find config names containing the module name.
-  return array_values(array_filter($this->configFactory->listAll(),
-    static function($name) use ($module) {
-      return preg_match('/[.]' . preg_quote($module, '/') . '(?:$|[.])/',
-        $name);
-    }));
-  }
-
-  private function getEnforcedModuleConfigNames(string $module): array {
-    $configNames = [];
+  /**
+   * Get config names matching patterns.
+   */
+  private function getConfigNames(array $patterns): array {
     $names = $this->configFactory->listAll();
-    foreach ($names as $name) {
-      $config = $this->configFactory->get($name)->getRawData();
-      if (isset($config['dependencies']['enforced']['module'])
-        && in_array($module, $config['dependencies']['enforced']['module'], TRUE)) {
-        $configNames[] = $name;
-      }
+    if (empty($patterns)) {
+      return $names;
     }
 
+    $configNames = [];
+    foreach ($patterns as $pattern) {
+      $chunk = array_filter(
+        $names,
+        static fn ($name) => fnmatch($pattern, $name),
+      );
+      if (empty($chunk)) {
+        throw new RuntimeException(sprintf('No config matches %s', var_export($pattern, TRUE)));
+      }
+      $configNames[] = $chunk;
+    }
+
+    $configNames = array_unique(array_merge(...$configNames));
+    sort($configNames);
+
     return $configNames;
+  }
+
+  /**
+   * Get config names for a module.
+   */
+  private function getModuleConfigNames(string $module): array {
+    return $this->getConfigNames(['*.' . $module . '.*']);
+  }
+
+  /**
+   * Get names of config that has an enforced dependency on a module.
+   */
+  private function getEnforcedModuleConfigNames(string $module): array {
+    return array_values(
+      array_filter(
+        $this->configFactory->listAll(),
+        static function ($name) use ($module) {
+          $config = $this->configFactory->get($name)->getRawData();
+          $list = $config['dependencies']['enforced']['module'] ?? NULL;
+
+          return is_array($list) && in_array($module, $list, TRUE);
+        }
+      )
+    );
   }
 
 }
