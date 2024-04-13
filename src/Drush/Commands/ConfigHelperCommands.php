@@ -5,7 +5,7 @@ namespace Drupal\config_helper\Drush\Commands;
 use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Extension\ModuleHandlerInterface;
 use Drupal\Core\File\FileSystemInterface;
-use Drupal\Core\Site\Settings;
+use Drupal\Core\Serialization\Yaml;
 use Drush\Attributes as CLI;
 use Drush\Commands\AutowireTrait;
 use Drush\Commands\DrushCommands;
@@ -38,7 +38,7 @@ final class ConfigHelperCommands extends DrushCommands {
   #[CLI\Usage(name: 'drush config_helper:list "views.view.*"', description: 'List all views.')]
   public function list(
     array $patterns,
-  ) {
+  ): void {
     $names = $this->getConfigNames($patterns);
 
     foreach ($names as $name) {
@@ -89,23 +89,22 @@ final class ConfigHelperCommands extends DrushCommands {
   }
 
   /**
-   * Move config info config folder in a module.
+   * Write config info config folder in module.
    */
-  #[CLI\Command(name: 'config_helper:move-module-config')]
+  #[CLI\Command(name: 'config_helper:write-module-config')]
   #[CLI\Argument(name: 'module', description: 'The module name.')]
   #[CLI\Argument(name: 'configNames', description: 'The config names.')]
   #[CLI\Option(name: 'optional', description: 'Create as optional config.')]
   #[CLI\Option(name: 'enforced', description: 'Move only config with enforced dependency on the module.')]
   #[CLI\Option(name: 'dry-run', description: 'Dry run.')]
-  #[CLI\Usage(name: 'drush config_helper:move-module-config my_module', description: '')]
-  #[CLI\Usage(name: 'drush config_helper:move-module-config --source=sites/all/config my_module', description: '')]
-  public function moveModuleConfig(
+  #[CLI\Usage(name: 'drush config_helper:write-module-config my_module', description: '')]
+  #[CLI\Usage(name: 'drush config_helper:write-module-config --source=sites/all/config my_module', description: '')]
+  public function writeModuleConfig(
     string $module,
     array $configNames,
     array $options = [
       'optional' => FALSE,
       'enforced' => FALSE,
-      'dry-run' => FALSE,
     ]
   ): void {
     if (!$this->moduleHandler->moduleExists($module)) {
@@ -116,46 +115,31 @@ final class ConfigHelperCommands extends DrushCommands {
       $configNames = $this->getEnforcedModuleConfigNames($module);
     }
     else {
-      if (empty($configNames)) {
-        $configNames = $this->getModuleConfigNames($module);
-      }
+      $configNames = empty($configNames)
+        ? $this->getModuleConfigNames($module)
+        : $this->getConfigNames($configNames);
     }
 
-    $source = $options['source'] ?? Settings::get('config_sync_directory');
-    if (NULL === $source) {
-      throw new RuntimeException('Config source not defined');
-    }
-    $configPath = DRUPAL_ROOT . '/' . $source;
-    if (!is_dir($configPath)) {
-      throw new RuntimeException(sprintf('Config directory %s does not exist',
-        $configPath));
-    }
     $modulePath = $this->moduleHandler->getModule($module)->getPath();
-    $moduleConfigPath = $modulePath . '/config/install';
-    if (!$options['dry-run']) {
+    $moduleConfigPath = $modulePath . '/config/' . ($options['optional'] ? 'optional' : 'install');
+
+    $question = sprintf("Write config\n * %s\n into %s?", implode("\n * ", $configNames), $moduleConfigPath);
+    if ($this->io()->confirm($question)) {
       if (!is_dir($moduleConfigPath)) {
         $this->fileSystem->mkdir($moduleConfigPath, 0755, TRUE);
       }
-    }
 
-    foreach ($configNames as $name) {
-      $this->io()->writeln($name);
+      foreach ($configNames as $name) {
+        $this->io()->writeln($name);
 
-      $filename = $name . '.yml';
-      $source = $configPath . '/' . $filename;
-      $destination = $moduleConfigPath . '/' . $filename;
+        $filename = $name . '.yml';
+        $destination = $moduleConfigPath . '/' . $filename;
+        $config = $this->configFactory->get($name)->getRawData();
+        // @see https://www.drupal.org/node/2087879#s-exporting-configuration
+        unset($config['uuid'], $config['_core']);
 
-      if (!file_exists($source)) {
-        $this->output()->writeln(sprintf('Source file %s does not exist',
-          $source));
-        continue;
+        file_put_contents($destination, Yaml::encode($config));
       }
-
-      if (!$options['dry-run']) {
-        $this->fileSystem->move($source, $destination,
-          FileSystemInterface::EXISTS_REPLACE);
-      }
-      $this->io()->writeln(sprintf('%s -> %s', $source, $destination));
     }
   }
 
@@ -230,13 +214,6 @@ final class ConfigHelperCommands extends DrushCommands {
   }
 
   /**
-   * Check if a config name exists.
-   */
-  private function configExists(string $name): bool {
-    return in_array($name, $this->configFactory->listAll(), TRUE);
-  }
-
-  /**
    * Get config names matching patterns.
    */
   private function getConfigNames(array $patterns): array {
@@ -249,6 +226,7 @@ final class ConfigHelperCommands extends DrushCommands {
     foreach ($patterns as $pattern) {
       $chunk = array_filter(
         $names,
+        // phpcs:disable Drupal.Functions.DiscouragedFunctions.Discouraged -- https://www.php.net/manual/en/function.fnmatch.php#refsect1-function.fnmatch-notes
         static fn ($name) => fnmatch($pattern, $name),
       );
       if (empty($chunk)) {
@@ -274,10 +252,10 @@ final class ConfigHelperCommands extends DrushCommands {
    * Get names of config that has an enforced dependency on a module.
    */
   private function getEnforcedModuleConfigNames(string $module): array {
-    return array_values(
+    $configNames = array_values(
       array_filter(
         $this->configFactory->listAll(),
-        static function ($name) use ($module) {
+        function ($name) use ($module) {
           $config = $this->configFactory->get($name)->getRawData();
           $list = $config['dependencies']['enforced']['module'] ?? NULL;
 
@@ -285,6 +263,12 @@ final class ConfigHelperCommands extends DrushCommands {
         }
       )
     );
+
+    if (empty($configNames)) {
+      throw new RuntimeException(sprintf('No config has an enforced dependency on "%s".', $module));
+    }
+
+    return $configNames;
   }
 
 }
