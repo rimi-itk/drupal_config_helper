@@ -1,0 +1,6 @@
+services:
+  Drupal\config_helper\ConfigHelper:
+    arguments:
+      - '@module_handler'
+      - '@config.factory'
+      - '@file_system'

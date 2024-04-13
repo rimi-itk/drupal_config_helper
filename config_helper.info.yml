@@ -1,0 +1,9 @@
+name: 'config_helper'
+type: module
+description: 'Config helper'
+# Used only for development and testing.
+hidden: true
+core_version_requirement: ^10
+package: 'ITK'
+
+# https://www.drupal.org/node/2087879
