@@ -16,9 +16,20 @@ if [ ! -f "$drupal_dir/composer.json" ]; then
   composer --no-interaction create-project drupal/recommended-project:^10 "$drupal_dir"
 fi
 # Copy our code into the modules folder
-mkdir -p "$drupal_dir/$module_path"
+
+# Clean up
+rm -fr "$drupal_dir/$module_path"
+
 # https://stackoverflow.com/a/15373763
-rsync --archive --compress . --filter=':- .gitignore' --exclude "$drupal_dir" --exclude .git "$drupal_dir/$module_path"
+# rsync --archive --compress . --filter=':- .gitignore' --exclude "$drupal_dir" --exclude .git "$drupal_dir/$module_path"
+
+# The rsync command in not available in itkdev/php8.3-fpm
+
+git config --global --add safe.directory /app
+# Create directories
+git ls-files -z | xargs --null -I {} --verbose bash -c 'mkdir -p '"$drupal_dir/$module_path/"'$(dirname {})'
+# Copy files
+git ls-files -z | xargs --null -I {} cp {} "$drupal_dir/$module_path/{}"
 
 drupal_composer config minimum-stability dev
 

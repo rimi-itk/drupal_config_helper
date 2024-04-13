@@ -44,5 +44,5 @@ Running statis code analysis on a standalone Drupal module is a bit tricky, so w
 analysis:
 
 ```sh
-./scripts/code-analysis
+docker run --rm --volume ${PWD}:/app --workdir /app itkdev/php8.3-fpm ./scripts/code-analysis
 ```
