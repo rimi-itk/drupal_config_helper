@@ -96,7 +96,6 @@ final class ConfigHelperCommands extends DrushCommands {
   #[CLI\Argument(name: 'configNames', description: 'The config names.')]
   #[CLI\Option(name: 'optional', description: 'Create as optional config.')]
   #[CLI\Option(name: 'enforced', description: 'Move only config with enforced dependency on the module.')]
-  #[CLI\Option(name: 'dry-run', description: 'Dry run.')]
   #[CLI\Usage(name: 'drush config_helper:write-module-config my_module', description: '')]
   #[CLI\Usage(name: 'drush config_helper:write-module-config --source=sites/all/config my_module', description: '')]
   public function writeModuleConfig(
@@ -147,37 +146,37 @@ final class ConfigHelperCommands extends DrushCommands {
    * Rename config.
    */
   #[CLI\Command(name: 'config_helper:rename')]
-  #[CLI\Argument(name: 'search', description: 'The value to search for.')]
-  #[CLI\Argument(name: 'replace', description: 'The replacement value.')]
+  #[CLI\Argument(name: 'from', description: 'The value to search for.')]
+  #[CLI\Argument(name: 'to', description: 'The replacement value.')]
+  #[CLI\Argument(name: 'configNames', description: 'The config names.')]
   #[CLI\Option(name: 'regex', description: 'Use regex search and replace.')]
-  #[CLI\Option(name: 'dry-run', description: 'Dry run.')]
   #[CLI\Usage(name: 'drush config_helper:rename porject project', description: 'Fix typo in config.')]
   #[CLI\Usage(name: "drush config_helper:rename 'field_(.+)' '\1' --regex", description: 'Remove superfluous prefix from field machine names.')]
   public function rename(
-    string $search,
-    string $replace,
+    string $from,
+    string $to,
+    array $configNames,
     array $options = [
       'regex' => FALSE,
-      'dry-run' => FALSE,
     ]
   ): void {
     if (!$options['regex']) {
-      $search = '/' . preg_quote($search, '/') . '/';
+      $from = '/' . preg_quote($from, '/') . '/';
     }
 
-    $this->io()->writeln(sprintf('Replacing %s with %s in config', $search, $replace));
+    $configNames = $this->getConfigNames($configNames);
+    $question = sprintf("Rename %s to %s in\n * %s\n?", $from, $to, implode("\n * ", $configNames));
+    if ($this->io()->confirm($question)) {
+      foreach ($configNames as $name) {
+        $config = $this->configFactory->getEditable($name);
+        $original = $config->getRawData();
+        $data = $this->replaceKeysAndValues($from, $to, $original);
+        $config->setData($data);
+        $config->save();
 
-    $names = $this->configFactory->listAll();
-    foreach ($names as $name) {
-      $config = $this->configFactory->getEditable($name);
-      $data = $this->replaceKeysAndValues($search, $replace, $config->get());
-      $config->setData($data);
-      $config->save();
-
-      if (preg_match($search, $name)) {
-        $newName = preg_replace($search, $replace, $name);
-        $this->io()->writeln(sprintf('%s -> %s', $name, $newName));
-        if (!$options['dry-run']) {
+        $newName = preg_replace($from, $to, $name);
+        if ($newName !== $name) {
+          $this->io()->writeln(sprintf('%s -> %s', $name, $newName));
           $this->configFactory->rename($name, $newName);
         }
       }
