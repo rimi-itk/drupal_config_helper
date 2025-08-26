@@ -14,7 +14,7 @@
         "dealerdirect/phpcodesniffer-composer-installer": "^1.0",
         "drupal/coder": "^8.3",
         "drupal/maillog": "^1.1",
-        "ergebnis/composer-normalize": "^2.42",
+        "ergebnis/composer-normalize": "^2.47",
         "mglaman/phpstan-drupal": "^1.2",
         "phpstan/extension-installer": "^1.3",
         "phpstan/phpstan-deprecation-rules": "^1.1"

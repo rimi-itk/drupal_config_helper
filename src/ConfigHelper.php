@@ -32,7 +32,7 @@ class ConfigHelper {
    */
   public function addEnforcedDependency(
     string $module,
-    array $configNames
+    array $configNames,
   ): void {
     foreach ($configNames as $name) {
       $this->logger->info(sprintf('Config name: %s', $name));
@@ -54,7 +54,7 @@ class ConfigHelper {
    */
   public function removeEnforcedDependency(
     string $module,
-    array $configNames
+    array $configNames,
   ): void {
     foreach ($configNames as $name) {
       $this->logger->info(sprintf('Config name: %s', $name));
@@ -86,7 +86,7 @@ class ConfigHelper {
   public function writeModuleConfig(
     string $module,
     mixed $optional,
-    array $configNames
+    array $configNames,
   ): void {
     $moduleConfigPath = $this->getModuleConfigPath($module, $optional);
     if (!is_dir($moduleConfigPath)) {
@@ -113,28 +113,28 @@ class ConfigHelper {
     string $from,
     string $to,
     array $configNames,
-    bool $regex = FALSE
+    bool $regex = FALSE,
   ): void {
     $replacer = $regex
       ? static fn (string $subject) => preg_replace($from, $to, $subject)
       : static fn (string $subject) => str_replace($from, $to, $subject);
 
-      foreach ($configNames as $name) {
-        $config = $this->configFactory->getEditable($name);
-        $data = $config->getRawData();
-        $newData = $this->replaceKeysAndValues($replacer, $data);
-        if ($newData !== $data) {
-          $config->setData($newData);
-          $this->logger->info(sprintf('Saving updated config %s', $name));
-          $config->save();
-        }
-
-        $newName = $replacer($name);
-        if ($newName !== $name) {
-          $this->logger->info(sprintf('Renaming config %s to %s', $name, $newName));
-          $this->configFactory->rename($name, $newName);
-        }
+    foreach ($configNames as $name) {
+      $config = $this->configFactory->getEditable($name);
+      $data = $config->getRawData();
+      $newData = $this->replaceKeysAndValues($replacer, $data);
+      if ($newData !== $data) {
+        $config->setData($newData);
+        $this->logger->info(sprintf('Saving updated config %s', $name));
+        $config->save();
       }
+
+      $newName = $replacer($name);
+      if ($newName !== $name) {
+        $this->logger->info(sprintf('Renaming config %s to %s', $name, $newName));
+        $this->configFactory->rename($name, $newName);
+      }
+    }
   }
 
   /**
@@ -218,7 +218,7 @@ class ConfigHelper {
    */
   private function replaceKeysAndValues(
     callable $replacer,
-    array $input
+    array $input,
   ): array {
     $return = [];
     foreach ($input as $key => $value) {

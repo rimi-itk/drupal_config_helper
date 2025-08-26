@@ -89,7 +89,7 @@ final class ConfigHelperCommands extends DrushCommands {
     array $options = [
       'optional' => FALSE,
       'enforced' => FALSE,
-    ]
+    ],
   ): void {
     $this->initialize();
 
@@ -129,7 +129,7 @@ final class ConfigHelperCommands extends DrushCommands {
     array $configNames,
     array $options = [
       'regex' => FALSE,
-    ]
+    ],
   ): void {
     $this->initialize();
 
